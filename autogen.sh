@@ -26,7 +26,7 @@ coap_config.h coap_config.h.in* compile config.guess config.h* config.log config
 depcomp
 doc/Doxyfile doc/doxyfile.stamp doc/doxygen_sqlite3.db doc/Makefile doc/Makefile.in
 examples/*.o  examples/coap-client examples/coap-server examples/coap-rd
-examples/coap-*.5 examples/coap-*.txt examples/Makefile.in
+examples/coap-*.5 examples/coap-*.txt examples/pubsub-broker examples/Makefile.in
 include/coap/coap.h
 install-sh
 libcoap-1.pc libtool ltmain.sh

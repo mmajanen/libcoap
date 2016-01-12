@@ -1414,8 +1414,8 @@ handle_request(coap_context_t *context, coap_queue_t *node) {
       debug("unhandled request for unknown resource 0x%02x%02x%02x%02x\r\n",
 	    key[0], key[1], key[2], key[3]);
 
-	response = coap_new_error_response(node->pdu, COAP_RESPONSE_CODE(405), 
-					   opt_filter);
+	response = coap_new_error_response(node->pdu, COAP_RESPONSE_CODE(404), 
+					   opt_filter);//405-->404 (MiM)
     }
       
     if (response
