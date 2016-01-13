@@ -1037,7 +1037,7 @@ main(int argc, char **argv) {
   char port_str[NI_MAXSERV] = "0";
   char node_str[NI_MAXHOST] = "";
   int opt, res;
-  coap_log_t log_level = LOG_WARNING;
+  coap_log_t log_level = LOG_DEBUG; //LOG_WARNING;
   coap_tid_t tid = COAP_INVALID_TID;
 
   while ((opt = getopt(argc, argv, "Na:b:e:f:g:m:p:s:t:o:v:A:B:O:P:T:")) != -1) {

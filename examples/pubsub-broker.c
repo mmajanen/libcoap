@@ -126,8 +126,8 @@ handle_sigint(int signum UNUSED_PARAM) {
   quit = 1;
 }
 
-#define INDEX "This is a test server made with libcoap (see http://libcoap.sf.net)\n" \
-              "Copyright (C) 2010--2013 Olaf Bergmann <bergmann@tzi.org>\n\n"
+#define INDEX "This is a CoAP publish-subscribe broker made with libcoap\n" \
+              "Copyright (C) 2015--2016 Mikko Majanen <mikko.majanen@vtt.fi>\n"
 
 static void
 hnd_get_index(coap_context_t *ctx UNUSED_PARAM,
@@ -274,11 +274,11 @@ hnd_delete_time(coap_context_t *ctx UNUSED_PARAM,
 
 
 void 
-hnd_put_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_endpoint_t *local_interface /* added this arg (MiM) */, 
+hnd_put_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_endpoint_t *local_interface, 
 	     coap_address_t *peer, coap_pdu_t *request, str *token,
 	     coap_pdu_t *response) {
 
-  printf("hnd_put_ps()\n");
+  debug("hnd_put_ps()\n");
 
   size_t size;
   unsigned char *data;
@@ -288,41 +288,85 @@ hnd_put_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
   
   int expired = -1; //whether the Max-Age for this resource is expired or not
 
+  coap_opt_iterator_t opt_iter;
+  coap_opt_t *option;
+  unsigned char *p;
+  
   //read the topic, it is part of the uri option ( /ps/topic )
   coap_hash_request_uri(request, urikey);
   //urikey is used as a hash key in resource value hash table...
   //find the right resource value by using the urikey
-  printf("urikey=0x%x%x%x%x\n, resource->key=%d\n", urikey[0],urikey[1],urikey[2], urikey[3], resource->key);
+  debug("urikey=0x%x%x%x%x\n", urikey[0],urikey[1],urikey[2], urikey[3]);
+
+  //cf should be the same as the topic ct; otherwise return error 
+  //(MiM 4.1.2016)
+  // check Content-Format option in PUT request
+  debug("checking Content-Format option in PUT...\n");
+  option = coap_check_option(request, COAP_OPTION_CONTENT_FORMAT, &opt_iter);
+  
+  if(option){
+    //compare to topic's ct attribute
+    p = COAP_OPT_VALUE(option);
+    
+    unsigned int opt_value = coap_decode_var_bytes(p, COAP_OPT_LENGTH(option));
+    debug("Content-Format = %u\n", opt_value);
+    coap_attr_t *ct = coap_find_attr(resource, "ct", 2);
+    if(ct){
+      debug("topic ct=%d\n", atoi(ct->value.s));
+      
+      if(atoi(ct->value.s) != opt_value){
+	debug("content type not allowed!\n");
+	response->hdr->code = COAP_RESPONSE_CODE(415);//Unsupported ct
+	return;
+      }
+      else {
+	debug("topic's ct matches with content-format option\n");
+      }
+    }
+    else {
+      //no ct attribute in topic
+      debug("did not find ct for topic!\n");
+      response->hdr->code = COAP_RESPONSE_CODE(415);//Unsupported ct
+      return;
+    }
+
+  }//if(option..
+  else {
+    //no content-format option in PUT message
+    debug("no content-format option in PUT message!\n");
+    response->hdr->code = COAP_RESPONSE_CODE(415);//Unsupported ct
+    return;
+  }
 
   
   coap_attr_t *maxage = coap_find_attr(resource, "max-age", 7);
   if(maxage != NULL){
-    printf("Max-Age of this resource is %s\n", /*resource->key,*/ maxage->value.s);
-
+    debug("Max-Age of this resource is %s\n", maxage->value.s);
+    
     struct timeval now;
     gettimeofday(&now, NULL);
-    //printf("now->tv_sec=%d\n", now.tv_sec);
+    
     if(now.tv_sec > atoi(maxage->value.s)){
-      printf("resource has expired its Max-Age!\n");
+      debug("resource has expired its Max-Age!\n");
       expired = 1;
     }
     else {
-      printf("Max-Age not expired\n");
+      debug("Max-Age not expired\n");
       expired = 0;
     }
 
   }
   else {
-    printf("no Max-Age for this resource\n");
+    debug("no Max-Age for this resource\n");
     expired = -1;
   }
 
 
   //read the topic value from the payload
   if(coap_get_data(request, &size, &data)){
-    printf("payload size = %d, data=%s\n", size, data); 
+    //debug("payload size = %d, data=%s\n", size, data); 
     memcpy(topic, data, size);
-    printf("topic value = %s\n", topic);
+    debug("topic value = %s\n", topic);
    
    
     int found = 0;
@@ -330,18 +374,18 @@ hnd_put_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
     HASH_FIND_INT(topic_values, urikey, tv);
     
     if(tv != NULL){
-      printf("topic already has a value\n");
+      debug("topic already has a value\n");
       found = 1;
     }
 
-    //If the topic does not exist, 
+    //If the topic value does not exist, 
     //create new hash table entry with (urikey, topic_value)
     if(found == 0){
       //delete the resource if Max-Age expired since no PUTs in time:
       if(expired == 1){
 	int deleted = coap_delete_resource(ctx, resource->key);
 	if(deleted == 1){
-	  printf("resource deleted\n");
+	  debug("resource deleted\n");
 	  response->hdr->code = COAP_RESPONSE_CODE(404);//NOT FOUND
 #ifdef COAP_STATS
 	  n_error_responses++;
@@ -350,7 +394,7 @@ hnd_put_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
 	  return;
 	}
 	else {
-	  printf("resource not deleted/found");
+	  debug("resource not deleted/found");
 	  response->hdr->code = COAP_RESPONSE_CODE(404);//NOT FOUND or internal error or something like that?
 #ifdef COAP_STATS
 	  n_error_responses++;
@@ -362,32 +406,26 @@ hnd_put_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
 
 
       if(expired == 0){
-	printf("Max-Age not expired, first PUT on this topic in time, deleting Max-Age\n");
+	debug("Max-Age not expired, first PUT on this topic in time, deleting Max-Age\n");
 	LL_DELETE(resource->link_attr, maxage);
 	coap_delete_attr(maxage);
-	//LL_DELETE(resource->link_attr, maxage);
 	maxage = NULL;
       }
       
       tv = (struct topic_value*)calloc(1, sizeof(struct topic_value));
-      //tv->urikeyhash = (unsigned char*)calloc(1, 4);
-      //memcpy(tv->urikeyhash, urikey, 4);
       memcpy(&(tv->urikeyhash), urikey, 4);//MiM 5.11.2015
       tv->vlen = size;
       tv->tvalue = (unsigned char*)calloc(1, size+1); 
       memcpy(tv->tvalue, topic, size);
-      //printf("tv->tvalue = %s, length = %d, sizeof(int)=%d\n", tv->tvalue, tv->vlen, sizeof(int));
-      //HASH_ADD_KEYPTR(hh, topic_values, tv->urikeyhash, 4, tv); //original
       HASH_ADD_INT(topic_values, urikeyhash, tv);//MiM 5.11.2015
       
       
-      printf("added value to resource = 0x%x%x%x%x, HASH_COUNT=%d\n", tv->urikeyhash[0],tv->urikeyhash[1], tv->urikeyhash[2],tv->urikeyhash[3], HASH_COUNT(topic_values));
+      debug("added value to resource = 0x%x%x%x%x, HASH_COUNT=%d\n", tv->urikeyhash[0],tv->urikeyhash[1], tv->urikeyhash[2],tv->urikeyhash[3], HASH_COUNT(topic_values));
       
     } //if found==0
 
     else { //topic already existed, update the existing value
-      //update the value:
-      printf("updating the topic value\n");
+      debug("updating the topic value\n");
       if(size != tv->vlen)
 	tv->tvalue = (unsigned char*)calloc(1, size+1); //MiM 15.12.2015 != 
       tv->vlen = size;
@@ -397,10 +435,8 @@ hnd_put_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
   
 
     //Check Max-Age option in PUT request:
-    printf("checking Max-Age option...\n");
-    coap_opt_iterator_t opt_iter;
-    coap_opt_t *option;
-    unsigned char *p;
+    debug("checking Max-Age option...\n");
+   
     option = coap_check_option(request, COAP_OPTION_MAXAGE, &opt_iter);
     if(option){
       p = COAP_OPT_VALUE(option);
@@ -410,154 +446,61 @@ hnd_put_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
       memcpy(pvalue, p, option_length);
       pvalue[option_length] = '\0';
       max_age = atoi(pvalue);
-      //printf("MAX_AGE option length = %d and value = %u, pvalue=%s\n", option_length, max_age, pvalue);
 
 
       /* calculate current time and expiration time */
       struct timeval now;
       gettimeofday(&now, NULL);
-      //printf("now->tv_sec=%d\n", now.tv_sec);
       now.tv_sec += max_age;
-      //printf("now->tv_sec=%d\n", now.tv_sec);
 
-      if(maxage /* || expired >= 0*/){
+      if(maxage){
 	//delete the old max-age attribute and then create new one
-	//printf("deleting old max-age attribute...\n");
 	LL_DELETE(resource->link_attr, maxage);	
 	coap_delete_attr(maxage);
-	//LL_DELETE(resource->link_attr, maxage);
 	maxage = NULL;
       }
-      //if(!maxage){
+      
       //create max-age attribute
       char *expiration = calloc(1, 32);
       if(expiration == NULL){
-	printf("error in calloc\n");
+	debug("error in calloc\n");
 	response->hdr->code = COAP_RESPONSE_CODE(500);//Internal Server Error
 	return;
       }
       sprintf(expiration, "%d", now.tv_sec);
-      //printf("expiration=%s = %d\n", expiration, atoi(expiration));
       char *attrname = calloc(1, 8);
       sprintf(attrname, "%s", "max-age");
-      //printf("attrname=%s\n", attrname);
       
       
       coap_attr_t *a = NULL;
-      a = coap_add_attr(resource, attrname/*"max-age"*/, 7, expiration, 32, /*0*/COAP_ATTR_FLAGS_RELEASE_NAME | COAP_ATTR_FLAGS_RELEASE_VALUE); 
-      //printf("flags = %x\n", COAP_ATTR_FLAGS_RELEASE_NAME | COAP_ATTR_FLAGS_RELEASE_VALUE); //flags == 3
-      /*
-      if(a != NULL){
-	//printf("a created\n");
-	printf("attribute max-age created for resource %s, value=%s\n", resource->key, a->value.s);
-      }
-      */
-    
+      a = coap_add_attr(resource, attrname/*"max-age"*/, 7, expiration, 32, COAP_ATTR_FLAGS_RELEASE_NAME | COAP_ATTR_FLAGS_RELEASE_VALUE); 
+      //flags == 3
+      
     
     } //if (option)...
     else {
       //no max-age option in PUT, delete possible existing max-age attribute:
-      printf("no max-age option in PUT, deleting existing max-age\n");
+      debug("no max-age option in PUT, deleting existing max-age\n");
       if(maxage != NULL){
-	printf("delete maxage attr and set to NULL\n");
+	debug("delete maxage attr and set to NULL\n");
 	LL_DELETE(resource->link_attr, maxage);
 	coap_delete_attr(maxage);
-	//LL_DELETE(resource->link_attr, maxage);//vaihto toisinpain 1.10.????
 	maxage = NULL;
       }
     }
     
-
-    //TODO: cf should be the same as the topic ct; otherwise return error 
-    //(MiM 4.1.2016)
-    // check Content-Format option in PUT request
-    printf("checking Content-Format option in PUT...\n");
-    option = coap_check_option(request, COAP_OPTION_CONTENT_FORMAT, &opt_iter);
-  
-    if(option){
-      //compare to topic's ct attribute
-      p = COAP_OPT_VALUE(option);
-     
-      unsigned int opt_value = coap_decode_var_bytes(p, COAP_OPT_LENGTH(option));
-      printf("Content-Format = %u = %d\n", opt_value, atoi(p));
-      coap_attr_t *ct = coap_find_attr(resource, "ct", 2);
-      if(ct){
-	printf("topic ct=%s = %d\n", ct->value.s, atoi(ct->value.s));
-	/*
-	if(COAP_OPT_LENGTH(option)==0){
-	  //option length == 0 --> content-format value == 0
-	  if(atoi(ct->value.s) != 0){
-	    printf("content type not allowed!\n");
-	    response->hdr->code = COAP_RESPONSE_CODE(415);//Unsupported ct
-	    return;
-	  }
-	}
-	*/
-	//else if(atoi(ct->value.s) != atoi(p)){
-	if(atoi(ct->value.s) != opt_value){
-	  printf("content type not allowed!\n");
-	  response->hdr->code = COAP_RESPONSE_CODE(415);//Unsupported ct
-	  return;
-	}
-	else {
-	  printf("topic's ct matches with content-format option\n");
-	}
-      }
-      else {
-	//no ct attribute in topic --> error or assume 0?
-	printf("did not find ct for topic!\n");
-	//TODO: error response code = ?
-	response->hdr->code = COAP_RESPONSE_CODE(415);//Unsupported ct
-	return;
-      }
-
-    }
-    else {
-      //no content-format option in PUT message, assume ct=0? or error?
-      printf("no content-format option in PUT message!\n");
-      response->hdr->code = COAP_RESPONSE_CODE(415);//Unsupported ct
-      return;
-    }
-
-    /*
-    //remove possible old Content-Format attribute:
-    coap_attr_t *cf = coap_find_attr(resource, "Content-Format", 15);
-    if(cf){
-      LL_DELETE(resource->link_attr, cf);
-      coap_delete_attr(cf);
-      //LL_DELETE(resource->link_attr, cf);
-    }
-    if(option){
-      p = COAP_OPT_VALUE(option);
-      printf("Content-Format = %u\n", atoi(p));
-
-      char *confor = calloc(1, 3);
-      if(confor == NULL){
-	printf("error in calloc\n");
-	//TODO: return error response
-      }
-      sprintf(confor, "%u", atoi(p));
-      //printf("content-format=%s = %u\n", confor, atoi(confor));
-      char *attrname = calloc(1, 15);
-      sprintf(attrname, "%s", "Content-Format");
-      //printf("attrname=%s\n", attrname);
-      
-      coap_attr_t *a = NULL;
-      a = coap_add_attr(resource, attrname, 15, confor, 3, COAP_ATTR_FLAGS_RELEASE_NAME | COAP_ATTR_FLAGS_RELEASE_VALUE); 
-    
-    }
-    */
 
     //return 2.04 Changed
     response->hdr->code = COAP_RESPONSE_CODE(204);
     
     //CHECK REQUEST TYPE (NON/CON); if NON, change resource's flag to NON so that the notifications will be NON type messages (MiM)
+    //TODO: this is not anymore in draft version 04 (MiM 12.1.2016)
     if(request->hdr->type == COAP_MESSAGE_NON){
-      printf("setting notifications to NON type\n");
+      debug("setting notifications to NON type\n");
       coap_resource_set_mode(resource, COAP_RESOURCE_FLAGS_NOTIFY_NON);
     }
     else if(request->hdr->type == COAP_MESSAGE_CON){
-      printf("setting notifications to CON type\n");
+      debug("setting notifications to CON type\n");
       coap_resource_set_mode(resource, COAP_RESOURCE_FLAGS_NOTIFY_CON);
     }
 
@@ -566,19 +509,19 @@ hnd_put_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
 	  n_publishments++;
 #endif
 
-    printf("notifying subscribers...\n");
+    debug("notifying subscribers...\n");
     resource->dirty = 1; //notify subscribers
 
 #ifdef COAP_STATS
-    printf("notifying statistics subscribers...\n");
+    debug("notifying statistics subscribers...\n");
     pubsub_stats_resource->dirty = 1; //notify statistics subscribers
 #endif
 
   }
   else {
-    printf("error reading data from request\n");
+    debug("error reading data from request\n");
     //send error response 4.00 Bad Request
-    printf("error code = %s\n", coap_response_phrase(COAP_RESPONSE_CODE(400)));
+    debug("error code = %s\n", coap_response_phrase(COAP_RESPONSE_CODE(400)));
     response->hdr->code = COAP_RESPONSE_CODE(400);
 #ifdef COAP_STATS
 	  n_error_responses++;
@@ -590,12 +533,12 @@ hnd_put_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
 }
 
 void 
-hnd_get_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_endpoint_t *local_interface /* added this arg (MiM) */,
+hnd_get_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_endpoint_t *local_interface,
 	   coap_address_t *peer, coap_pdu_t *request, str *token,
 	   coap_pdu_t *response) {
   
 
-  printf("hnd_get_ps()\n");
+  debug("hnd_get_ps()\n");
 
 #ifdef COAP_STATS
   n_sent_messages++;
@@ -615,8 +558,8 @@ hnd_get_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
   //MiM 5.1.2015
   coap_attr_t *cf = coap_find_attr(resource, "ct", 2);
   if(cf == NULL){
-    printf("topic does not have ct!\n");
-    response->hdr->code = COAP_RESPONSE_CODE(415);//Unsupported ct or else???
+    debug("topic does not have ct!\n");
+    response->hdr->code = COAP_RESPONSE_CODE(415);//Unsupported ct or else?
     return;
   }
 
@@ -628,21 +571,16 @@ hnd_get_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
       p = COAP_OPT_VALUE(option);
 
       unsigned int opt_value = coap_decode_var_bytes(p, COAP_OPT_LENGTH(option));
-      printf("decoded content-format = %u\n", opt_value);
-      /*
-      if(cformat==0 && COAP_OPT_LENGTH(option)==0){
-	printf("ct=0, ok\n");
-      }
-      */
-      //else if(cformat != atoi(p)){
+      debug("decoded content-format = %u\n", opt_value);
+     
       if(cformat != opt_value){
-	printf("content-format option value %d differs from topic ct=%d!\n",opt_value/*atoi(p)*/, cformat);
+	debug("content-format option value %d differs from topic ct=%d!\n",opt_value, cformat);
 	response->hdr->code = COAP_RESPONSE_CODE(415);//Unsupported ct
 	return;
       }
     }
     else {
-      printf("no content-format option in GET message!\n");
+      debug("no content-format option in GET message!\n");
       //TODO: assume any ct is good for the client...?
       //TODO: automatic unsubscription messages by coap-client do not contain cf option...
       //response->hdr->code = COAP_RESPONSE_CODE(415);//Unsupported ct
@@ -653,25 +591,17 @@ hnd_get_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
   if(request != NULL){
     //topic is part of uri option (NOT if observable notification; request=0 then)
     coap_hash_request_uri(request, urikey);
-    //printf("urikey from request: %d\nresource->key=%d\n", urikey, resource->key);
   }
   else {
     //observable notification, get the urikey...
-    //printf("observable notification, reading key from resource->key\n");
-    
-    memcpy(&urikey, resource->key, 4);
-    //printf("obs.notfication, urikey from resource = %d\n", urikey);      
+    memcpy(&urikey, resource->key, 4);      
   }
-  printf("urikey=0x%x%x%x%x\n, resource->key=%d\n", urikey[0],urikey[1],urikey[2], urikey[3], resource->key);
+  debug("urikey=0x%x%x%x%x\n", urikey[0],urikey[1],urikey[2], urikey[3]);
 
-  //printf("urikey=%d\n", urikey);
 
   HASH_FIND_INT(topic_values, urikey, tv);
   if(tv != NULL){
-    //printf("found topic with key %s\n", urikey);
    
-    
-    
     //check for observe option
     if (request != NULL &&
 	coap_check_option(request, COAP_OPTION_OBSERVE, &opt_iter)) {
@@ -680,36 +610,32 @@ hnd_get_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
       if(option){
 	//MiM 30.9.2015:
 	observe_action = coap_decode_var_bytes(coap_opt_value(option), coap_opt_length(option));
-	printf("observe_action = %u = %c\n", observe_action, (unsigned char)observe_action);
-
-	///////////
-	//DONE: check if option_length==0 --> subscribe (MiM 4.11.2015)
+	debug("observe_action = %u\n", observe_action);
 
 	p = COAP_OPT_VALUE(option);
-	//printf("OBSERVE option value = %s\n", p);
-	//}
-	if(coap_opt_length(option) == 0 || *p == '0'){
-	  printf("OBSERVE value == 0, adding subscriber, peer=%d, token=%s\n", peer->size, token);
-	  subscription = coap_add_observer(resource, local_interface, peer, token);//TODO: more args... local_interface 5.8.2015 (MiM)
+       
+	if(observe_action==0 || coap_opt_length(option) == 0 || *p == '0'){
+	  debug("OBSERVE value == 0, adding subscriber, peer=%d, token=%s\n", peer->size, token);
+	  subscription = coap_add_observer(resource, local_interface, peer, token);
 	  if (subscription) {
 #ifdef COAP_STATS
   n_subscribers++;
 #endif
-	    //subscription->non = request->hdr->type == COAP_MESSAGE_NON;//TODO: this should be based on the publishers PUT request, not client's GET request; this should be available from resource->flags... (MiM)
-	    printf("adding OBSERVE option to response\n");
-	    coap_add_option(response, COAP_OPTION_OBSERVE, coap_encode_var_bytes(buf, ctx->observe), buf);//added option value 15.7.2015!
+	    
+	    debug("adding OBSERVE option to response\n");
+	    coap_add_option(response, COAP_OPTION_OBSERVE, coap_encode_var_bytes(buf, ctx->observe), buf);
 	  }
-        }//p==0
+        }
 	else if(*p == '1' || observe_action == 1){
-	  printf("OBSERVE option == 1, unsubscribing, peer=%d, token=%s\n", peer->size, token);
+	  debug("OBSERVE option == 1, unsubscribing, peer=%d, token=%s\n", peer->size, token);
 	  //unsubscribe the topic by deleting the observer
 	  coap_delete_observer(resource, peer, token);
 #ifdef COAP_STATS
 	  n_subscribers--;
 #endif
-        }//p==1
+        }
 	else{
-	  printf("unknown OBSERVE option %c\n", p);
+	  debug("unknown OBSERVE option %u\n", observe_action);
 	  //error response BAD REQUEST 4.00
 	  response->hdr->code = COAP_RESPONSE_CODE(400);
 #ifdef COAP_STATS
@@ -720,30 +646,18 @@ hnd_get_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
       }//if(option)
     }//if (request != NULL && ....
     else {
-      printf("request == NULL or OBSERVE not found\n");
-      //this means that the topic has changed and subscribers should be sent the updated topic value...
-      // resource->dirty will handle that...
+      debug("request == NULL or OBSERVE not found\n");
       //request==NULL --> send notification
       //request!=NULL && OBSERVE not found i.e. GET without observe == READ
     }
-    
-    
-
-  
-    
+       
     if (resource->dirty == 1){
-      printf("resource->dirty, ctx->observe=%d\n", ctx->observe);
-      printf("adding OBSERVE option in notification...\n");
+      debug("resource->dirty, ctx->observe=%d\n", ctx->observe);
+      debug("adding OBSERVE option in notification...\n");
       coap_add_option(response, COAP_OPTION_OBSERVE, 
 		      coap_encode_var_bytes(buf, ctx->observe), buf);
-      //TODO: this could be place to check/set the response type NON/CON...? Actually, should be done everywhere where OBSERVE option is added to response...
-      //THIS IS DONE AUTOMATICALLY SOMEWHERE ELSE IN LIBCOAP...? ! (MiM 29.9.)
-      //
-      //if(resource->flags == COAP_RESOURCE_FLAGS_NOTIFY_CON)
-	//response->hdr->type = COAP_MESSAGE_CON;
-      //else if (resource->flags == COAP_RESOURCE_FLAGS_NOTIFY_NON)
-	//response->hder->type = COAP_MESSAGE_NON;
-      //
+     
+      
 #ifdef COAP_STATS
       n_sent_notifications++;
 #endif
@@ -754,55 +668,43 @@ hnd_get_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
     if(tv->tvalue){
       
       //Add Content-Format option (MiM 4.1.2015):
-      //TODO: Tuleeko JKO:n virhe taalta? cf stringi vai int? Mita on buf:ssa?
       coap_attr_t *cf = coap_find_attr(resource, "ct", 2);
       if(cf){
 	unsigned int cformat = atoi(cf->value.s);
-	if(cformat==0){
-	  //TODO: only cf option with option length=0, no value
-	}
-	printf("adding Content-Format = %u option\n", /*cf->value.s,*/ cformat);
+	
+	debug("adding Content-Format = %u option\n", cformat);
 	coap_add_option(response, COAP_OPTION_CONTENT_FORMAT, coap_encode_var_bytes(buf, cformat), buf);
       }
       else {
-	printf("topic has no ct!\n");
+	debug("topic has no ct!\n");
 	//TODO: error response = ?
       }
-      //add Content-Format option if resource has Content-Format attribute:
-      //      coap_attr_t *cf = coap_find_attr(resource, "Content-Format", 15);
-      //if(cf){
-      //unsigned int cformat = atoi(cf->value.s);
-      //printf("adding Content-Format = %u option\n", /*cf->value.s,*/ cformat);
-      //coap_add_option(response, COAP_OPTION_CONTENT_FORMAT, coap_encode_var_bytes(buf, cformat), buf);
-      //}
-
-
+     
       //add Max-Age option if needed:
       coap_attr_t *maxage = coap_find_attr(resource, "max-age", 7);
       if(maxage){
-	printf("adding Max-Age option if not expired...\n");
+	debug("adding Max-Age option if not expired...\n");
 	struct timeval now;
 	gettimeofday(&now, NULL);
-	//printf("now->tv_sec=%d\n", now.tv_sec);
 	int ma = atoi(maxage->value.s) - now.tv_sec;
 	if(ma <= 0){
-	  printf("Max-Age expired! returning No Content 2.04\n");
+	  debug("Max-Age expired! returning No Content 2.04\n");
 	  response->hdr->code = COAP_RESPONSE_CODE(204); //NO CONTENT
 	  return;
 	}
-	//printf("ma = %d\n", ma);
+
 	coap_add_option(response, COAP_OPTION_MAXAGE, coap_encode_var_bytes(buf, ma), buf);
       }
       
       //add data value:
       response->hdr->code = COAP_RESPONSE_CODE(205);//CONTENT
-      printf("topic value = %s, topic length=%d\n", tv->tvalue, tv->vlen);
+      debug("topic value = %s, topic length=%d\n", tv->tvalue, tv->vlen);
       coap_add_data(response, tv->vlen, tv->tvalue);
       
       
     }
     else {  //if no content:
-      printf("no topic value\n");
+      debug("no topic value\n");
       response->hdr->code = COAP_RESPONSE_CODE(204); //NO CONTENT
     }
 
@@ -810,7 +712,7 @@ hnd_get_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
 
   }//if(tv != NULL)
   else {
-    printf("error: did not find topic value with key 0x%x%x%x%x\n", urikey[0], urikey[1], urikey[2],urikey[3]);
+    debug("error: did not find topic value with key 0x%x%x%x%x\n", urikey[0], urikey[1], urikey[2],urikey[3]);
     response->hdr->code = COAP_RESPONSE_CODE(204); //NO CONTENT
 
     //if Max-Age expired, delete the resource:
@@ -818,9 +720,9 @@ hnd_get_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
     if(maxage){
       struct timeval now;
       gettimeofday(&now, NULL);
-      //printf("now->tv_sec=%d\n", now.tv_sec);
+      
       if(now.tv_sec > atoi(maxage->value.s)){
-	printf("Max-Age expired and no value, deleting resource\n");
+	debug("Max-Age expired and no value, deleting resource\n");
 	coap_delete_resource(ctx, urikey);
 #ifdef COAP_STATS
 	n_error_responses++;
@@ -839,7 +741,7 @@ pubsub_stats_resource->dirty = 1;
 #ifdef COAP_STATS
 void hnd_get_ps_stats(coap_context_t  *ctx, struct coap_resource_t *resource,  const coap_endpoint_t *local_interface, coap_address_t *peer, coap_pdu_t *request, str *token, coap_pdu_t *response){
   
-  printf("hnd_get_ps_stats\n");
+  debug("hnd_get_ps_stats\n");
 
   coap_opt_iterator_t opt_iter;
   coap_opt_t *option;
@@ -857,22 +759,22 @@ void hnd_get_ps_stats(coap_context_t  *ctx, struct coap_resource_t *resource,  c
       p = COAP_OPT_VALUE(option);
       
       if(coap_opt_length(option) == 0 || *p == '0'){
-	printf("OBSERVE value == 0, adding subscriber, peer=%d, token=%s\n", peer->size, token);
+	debug("OBSERVE value == 0, adding subscriber, peer=%d, token=%s\n", peer->size, token);
 	subscription = coap_add_observer(resource, local_interface, peer, token);
 	n_subscribers++;
 	if (subscription) {
-	  printf("adding OBSERVE option to response\n");
-	  coap_add_option(response, COAP_OPTION_OBSERVE, coap_encode_var_bytes(buf, ctx->observe), buf);//added option value 15.7.2015!
+	  debug("adding OBSERVE option to response\n");
+	  coap_add_option(response, COAP_OPTION_OBSERVE, coap_encode_var_bytes(buf, ctx->observe), buf);
 	}
       }//p==0
       else if(*p == '1'){
-	printf("OBSERVE option == 1, unsubscribing, peer=%d, token=%s\n", peer->size, token);
+	debug("OBSERVE option == 1, unsubscribing, peer=%d, token=%s\n", peer->size, token);
 	//unsubscribe the topic by deleting the observer
 	coap_delete_observer(resource, peer, token);
 	n_subscribers--; 
       }//p==1
       else{
-	printf("unknown OBSERVE option %c\n", p);
+	debug("unknown OBSERVE option %c\n", p);
 	//error response BAD REQUEST 4.00
 	response->hdr->code = COAP_RESPONSE_CODE(400);
 	n_error_responses++;
@@ -882,17 +784,15 @@ void hnd_get_ps_stats(coap_context_t  *ctx, struct coap_resource_t *resource,  c
     }//if(option)
   }//if (request != NULL && ....
   else {
-    printf("request == NULL or OBSERVE not found\n");
-    //this means that the topic has changed and subscribers should be sent the updated topic value...
-    // resource->dirty will handle that...
+    debug("request == NULL or OBSERVE not found\n");
     //request==NULL --> send notification
     //request!=NULL && OBSERVE not found i.e. GET without observe == READ
   }
  
     
   if (resource->dirty == 1){
-    printf("resource->dirty, ctx->observe=%d\n", ctx->observe);
-    printf("adding OBSERVE option in notification...\n");
+    debug("resource->dirty, ctx->observe=%d\n", ctx->observe);
+    debug("adding OBSERVE option in notification...\n");
     coap_add_option(response, COAP_OPTION_OBSERVE, 
 		    coap_encode_var_bytes(buf, ctx->observe), buf);
     n_sent_notifications ++;
@@ -903,7 +803,7 @@ void hnd_get_ps_stats(coap_context_t  *ctx, struct coap_resource_t *resource,  c
   coap_attr_t *cf = coap_find_attr(resource, "ct", 2);
   if(cf){
     unsigned int cformat = atoi(cf->value.s);
-    printf("adding Content-Format = %u option\n", /*cf->value.s,*/ cformat);
+    debug("adding Content-Format = %u option\n", cformat);
     coap_add_option(response, COAP_OPTION_CONTENT_FORMAT, coap_encode_var_bytes(buf, cformat), buf);
   }
   
@@ -923,7 +823,7 @@ void hnd_get_ps_stats(coap_context_t  *ctx, struct coap_resource_t *resource,  c
   
   char returnstring[100] = {0};
   int len = sprintf(returnstring, "%d:%d:%d:%d:%d:%d:%d", n_sent_messages, n_sent_stats, n_sent_notifications, n_topics, n_subscribers, n_publishments, n_error_responses);
-  printf("len, returnstring = %d, %s\n", len, returnstring);
+  //debug("len, returnstring = %d, %s\n", len, returnstring);
 
 
   coap_add_data(response, len, returnstring);
@@ -933,21 +833,19 @@ void hnd_get_ps_stats(coap_context_t  *ctx, struct coap_resource_t *resource,  c
 #endif
 
 void 
-hnd_delete_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coap_endpoint_t *local_interface /* added this arg (MiM) */,
+hnd_delete_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coap_endpoint_t *local_interface,
 	     coap_address_t *peer, coap_pdu_t *request, str *token,
 	     coap_pdu_t *response) {
 
-  printf("hnd_delete_ps()\n");
+  debug("hnd_delete_ps()\n");
 
   //topic is part of uri option
   coap_key_t urikey;
   coap_hash_request_uri(request, urikey);
-  //printf("urikey = %d, resource->key=%d\n",urikey, resource->key);
 
   //remove the topic
   int deleted = coap_delete_resource(ctx, resource->key);
 
-  //printf("urikey after deleting = %s\n", resource->key);
 #ifdef COAP_STATS
   n_topics--;
   n_sent_messages++;
@@ -958,30 +856,28 @@ hnd_delete_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coa
   HASH_FIND_INT(topic_values, urikey, tv);
   if(tv != NULL){
     HASH_DEL(topic_values, tv);
-    printf("topic value deleted from topic_values\n");
+    debug("topic value deleted from topic_values\n");
   }
   else{
-    printf("topic value not found in topic_values\n");
+    debug("topic value not found in topic_values\n");
   }
-  printf("HASH size = %d\n", HASH_COUNT(topic_values)); 
+  debug("HASH size = %d\n", HASH_COUNT(topic_values)); 
 
   if(deleted == 1){
     //send response DELETED
-    printf("topic deleted!\n");
+    debug("topic deleted!\n");
     response->hdr->code = COAP_RESPONSE_CODE(202);
   }
   else if(deleted == 0){
-    printf("error deleting topic\n");
-    //TODO: send error
+    debug("error deleting topic\n");
     response->hdr->code = COAP_RESPONSE_CODE(404);
 #ifdef COAP_STATS
   n_error_responses++;
 #endif
   }
   else {
-    printf("unknown error deleting topic\n");
-    //TODO: send another error
-    response->hdr->code = COAP_RESPONSE_CODE(404);
+    debug("unknown error deleting topic\n");
+    response->hdr->code = COAP_RESPONSE_CODE(500);//server internal error
 #ifdef COAP_STATS
   n_error_responses++;
 #endif
@@ -993,13 +889,12 @@ hnd_delete_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coa
 
 
 void 
-hnd_post_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coap_endpoint_t *local_interface /* added this arg (MiM) */,
+hnd_post_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coap_endpoint_t *local_interface,
 	     coap_address_t *peer, coap_pdu_t *request, str *token,
 	     coap_pdu_t *response) {
 
-  printf("hnd_post_ps()\n");
+  debug("hnd_post_ps()\n");
 
-  //coap_opt_iterator_t opt_iter;
   size_t size;
   unsigned char *data;
   unsigned char topic[20] = {0};
@@ -1011,14 +906,13 @@ hnd_post_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coap_
 
   //read the "topic" from the payload (CoRE link-format including also ct!)
   if(coap_get_data(request, &size, &data)){
-    //printf("payload size = %d, data=%s\n", size, data); 
     memcpy(topic, data, size);
-    printf("topic = %s\n", topic);
+    debug("topic;ct = %s\n", topic);
   }
   else {
-    printf("error reading data from request\n");
+    debug("error reading data from request\n");
     //send error response 4.00 Bad Request
-    printf("error code = %s\n", coap_response_phrase(COAP_RESPONSE_CODE(400)));
+    debug("error code = %s\n", coap_response_phrase(COAP_RESPONSE_CODE(400)));
     response->hdr->code = COAP_RESPONSE_CODE(400);
 #ifdef COAP_STATS
     n_error_responses++;
@@ -1036,7 +930,7 @@ hnd_post_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coap_
   int topic_end = -1; 
   int topic_length = -1;
   int attr_length = -1;
-  //unsigned char content_type[3] = {0};
+  
   unsigned char *content_type;
   int ct = 0;
   for(int i=0;i<size;i++){
@@ -1048,7 +942,7 @@ hnd_post_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coap_
   if(topic_start<topic_end && topic_start != -1 && topic_end != -1){
     topic_length = topic_end - topic_start -1;
     attr_length = size - topic_end -5;
-    printf("attr_length=%d\n", attr_length);
+    //debug("attr_length=%d\n", attr_length);
     content_type = (unsigned char*)calloc(1, attr_length+1);
     if(content_type == NULL){
       //allocation failed
@@ -1057,46 +951,42 @@ hnd_post_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coap_
     }
     memcpy(content_type, &topic[topic_end+5], attr_length);
     ct = atoi(content_type);
-    printf("ct=%d = %s\n", ct, content_type);
+    debug("ct=%d\n", ct);
   }
   else {
-    printf("error parsing topic: length=%d, start=%d, end=%d\n", topic_length, topic_start, topic_end);
+    debug("error parsing topic: length=%d, start=%d, end=%d\n", topic_length, topic_start, topic_end);
     // return an error code
     response->hdr->code = COAP_RESPONSE_CODE(400);//BAD REQUEST
     return;
   }
   //check the current resources whether this topic already exists?
   coap_key_t pskey;
-  //char path[30] = {0};
-  //unsigned char *path = (unsigned char*)calloc(1, size+4);//MiM 15.12.2015
   unsigned char *path = (unsigned char*)calloc(1, topic_length+4);//MiM 16.12.2015
   path[0] = 'p';
   path[1] = 's';
   path[2] = '/';
-  //memcpy(&path[3], topic, size);
+  
   memcpy(&path[3], &topic[topic_start+1], topic_length); //MiM 16.12.2015
-  printf("path=%s, length=%d\n", path, topic_length+3/*size+3*/);
-  //coap_hash_request_uri(request, pskey); //finds /ps...
-  coap_hash_path(path, topic_length+3/*size+3*//*strlen(path)*/, pskey); //finds /ps...
-  //printf("pskey=%d\n", pskey);
+  //debug("path=%s, length=%d\n", path, topic_length+3);
+  
+  coap_hash_path(path, topic_length+3, pskey); 
+
   if(coap_get_resource_from_key(ctx, pskey) == NULL){
-    //printf("resource not found with key=%d, creating it\n", pskey);
-   
     //create the resource
 
-    coap_resource_t *newr = coap_resource_init((unsigned char *)path, topic_length+3/*size+3*/, 0);
+    coap_resource_t *newr = coap_resource_init((unsigned char *)path, topic_length+3, 0);
     if(newr == NULL){
-      printf("error creating new resource\n");
+      debug("error creating new resource\n");
       response->hdr->code = COAP_RESPONSE_CODE(500);//Internal Server Error
       return;
     }
-    //printf("before add_resource(): newr->key=%d\n", newr->key);
+    
     coap_register_handler(newr, COAP_REQUEST_POST, hnd_post_ps);//TODO: this should be a different function to support subtopics?
     coap_register_handler(newr, COAP_REQUEST_PUT, hnd_put_ps);
     coap_register_handler(newr, COAP_REQUEST_GET, hnd_get_ps);
     coap_register_handler(newr, COAP_REQUEST_DELETE, hnd_delete_ps);
 
-    coap_add_attr(newr, "ct", 2, content_type, attr_length, /*0 /*COAP_ATTR_FLAGS_RELEASE_NAME |*/ COAP_ATTR_FLAGS_RELEASE_VALUE ); //MiM 16.12.2015
+    coap_add_attr(newr, "ct", 2, content_type, attr_length, /*COAP_ATTR_FLAGS_RELEASE_NAME |*/ COAP_ATTR_FLAGS_RELEASE_VALUE ); //MiM 16.12.2015
 
     newr->observable = 1; //make it observable so that clients can subscribe it
 
@@ -1110,46 +1000,34 @@ hnd_post_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coap_
       memcpy(pvalue, p, option_length);
       pvalue[option_length] = '\0';
       max_age = atoi(pvalue);
-      printf("MAX_AGE option length = %d and value = %u\n", option_length, max_age);
+      debug("MAX_AGE option length = %d and value = %u\n", option_length, max_age);
 
 
       /* calculate current time and expiration time */
       struct timeval now;
       gettimeofday(&now, NULL);
-      //printf("now->tv_sec=%d\n", now.tv_sec);
       now.tv_sec += max_age;
-      //printf("now->tv_sec=%d\n", now.tv_sec);
       char *expiration = calloc(1, 32);
       if(expiration == NULL){
-	printf("error in calloc\n");
+	debug("error in calloc\n");
 	response->hdr->code = COAP_RESPONSE_CODE(500);//Internal Server Error
 	return;
       }
       sprintf(expiration, "%d", now.tv_sec);
-      //printf("expiration=%s = %d\n", expiration, atoi(expiration));
       char *attrname = calloc(1, 8);
       sprintf(attrname, "%s", "max-age");
-      //printf("attrname=%s\n", attrname);
       
 
       coap_attr_t *a = NULL;
-      a = coap_add_attr(newr, attrname/*"max-age"*/, 7, expiration, 32, /*0*/COAP_ATTR_FLAGS_RELEASE_NAME | COAP_ATTR_FLAGS_RELEASE_VALUE); 
-      //printf("flags = %x\n", COAP_ATTR_FLAGS_RELEASE_NAME | COAP_ATTR_FLAGS_RELEASE_VALUE); //flags == 3
-      
-      /*
-      if(a != NULL){
-	//printf("a created\n");
-	printf("attribute max-age created for resource %s, value=%s\n", newr->key, a->value.s);
-      }
-      */
+      a = coap_add_attr(newr, attrname/*"max-age"*/, 7, expiration, 32, COAP_ATTR_FLAGS_RELEASE_NAME | COAP_ATTR_FLAGS_RELEASE_VALUE); //flags == 3
      
     }
 
     coap_add_resource(ctx, newr);
     
-    printf("newr resource key = %d, resource uri=%s, uri.length=%d\n", newr->key, newr->uri.s, newr->uri.length);//
+    debug("newr resource key = %d, resource uri=%s, uri.length=%d\n", newr->key, newr->uri.s, newr->uri.length);
     //send response 2.01 Created
-    printf("response code = %s\n", coap_response_phrase(COAP_RESPONSE_CODE(201)));
+    debug("response code = %s\n", coap_response_phrase(COAP_RESPONSE_CODE(201)));
     response->hdr->code = COAP_RESPONSE_CODE(201);
 
     //add Location-Path options:
@@ -1167,9 +1045,9 @@ hnd_post_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coap_
 
   }
   else { 
-    //printf("resource found with key=%d\n", pskey);
+    
     //send error response 4.03 Forbidden
-    printf("error code = %s\n", coap_response_phrase(COAP_RESPONSE_CODE(403)));
+    debug("error code = %s\n", coap_response_phrase(COAP_RESPONSE_CODE(403)));
     response->hdr->code = COAP_RESPONSE_CODE(403);
 #ifdef COAP_STATS
   n_error_responses++;
@@ -1305,7 +1183,6 @@ init_resources(coap_context_t *ctx) {
   coap_register_handler(psr, COAP_REQUEST_GET, hnd_get_ps);
   coap_register_handler(psr, COAP_REQUEST_DELETE, hnd_delete_ps);
 
-  //TODO: attributes to /ps ? ct, title, rt, if?
   coap_add_attr(psr, "rt", 2, "core.ps", 7, 0);
   coap_add_attr(psr, "ct", 2, "40", 2, 0); //content-type=40=app/link-format
   coap_add_attr(psr, (unsigned char *)"title", 5, (unsigned char *)"\"CoAP pubsub broker\"", 20, 0);
@@ -1314,20 +1191,15 @@ init_resources(coap_context_t *ctx) {
   coap_add_resource(ctx, psr);
   pubsub_resource = psr;
 
-  //printf("psr resource key = %s\n", psr->key);
 
 #ifdef COAP_STATS
   //pub sub statistics resource (MiM 19.11.2015), not part of standard draft
   coap_resource_t *ps_stats; //pub-sub statistics resource
 
   ps_stats = coap_resource_init((unsigned char *)"ps/stats", 8, COAP_RESOURCE_FLAGS_NOTIFY_NON); //The last flag determines whether the observe notifications are CON or NON type messages (MiM)
-  //coap_register_handler(psr, COAP_REQUEST_POST, hnd_post_ps);
-  //coap_register_handler(psr, COAP_REQUEST_PUT, hnd_put_ps);
+  
   coap_register_handler(ps_stats, COAP_REQUEST_GET, hnd_get_ps_stats);
-  //coap_register_handler(psr, COAP_REQUEST_DELETE, hnd_delete_ps);
-
-  //TODO: attributes to /ps/stats ? ct, title, rt, if?
-  //coap_add_attr(psr, "rt", 2, "core.ps", 7, 0);
+ 
   coap_add_attr(ps_stats, (unsigned char *)"ct", 2, (unsigned char *)"0", 1, 0);
 
   ps_stats->observable = 1;
@@ -1359,8 +1231,8 @@ usage( const char *program, const char *version) {
   if ( p )
     program = ++p;
 
-  fprintf( stderr, "%s v%s -- a small CoAP implementation\n"
-     "(c) 2010,2011,2015 Olaf Bergmann <bergmann@tzi.org>\n\n"
+  fprintf( stderr, "%s v%s -- CoAP publish-subscribe broker\n"
+     "(c) 2015-2016 Mikko Majanen <mikko.majanen@vtt.fi>\n\n"
      "usage: %s [-A address] [-p port]\n\n"
      "\t-A address\tinterface address to bind to\n"
      "\t-g group\tjoin the given multicast group\n"
