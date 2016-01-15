@@ -563,9 +563,9 @@ hnd_get_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
     return;
   }
 
-  //Check the content-format option (MiM 5.1.2015):
+  //Check the Accept (content-format) option (MiM 15.1.2015):
   if(request != NULL){
-    option = coap_check_option(request, COAP_OPTION_CONTENT_FORMAT, &opt_iter);
+    option = coap_check_option(request, COAP_OPTION_ACCEPT, &opt_iter);
     if(option){
       unsigned int cformat = atoi(cf->value.s);
       p = COAP_OPT_VALUE(option);
@@ -574,15 +574,15 @@ hnd_get_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
       debug("decoded content-format = %u\n", opt_value);
      
       if(cformat != opt_value){
-	debug("content-format option value %d differs from topic ct=%d!\n",opt_value, cformat);
+	debug("accepted content-format %d differs from topic ct=%d!\n",opt_value, cformat);
 	response->hdr->code = COAP_RESPONSE_CODE(415);//Unsupported ct
 	return;
       }
     }
     else {
-      debug("no content-format option in GET message!\n");
-      //TODO: assume any ct is good for the client...?
-      //TODO: automatic unsubscription messages by coap-client do not contain cf option...
+      debug("no accepted content-formats option in GET message!\n");
+      //assume any ct is good for the client...
+      //automatic unsubscription messages by coap-client do not contain cf option, either...
       //response->hdr->code = COAP_RESPONSE_CODE(415);//Unsupported ct
       //return;
     }
@@ -615,7 +615,7 @@ hnd_get_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
 	p = COAP_OPT_VALUE(option);
        
 	if(observe_action==0 || coap_opt_length(option) == 0 || *p == '0'){
-	  debug("OBSERVE value == 0, adding subscriber, peer=%d, token=%s\n", peer->size, token);
+	  debug("OBSERVE value == 0, adding subscriber\n");
 	  subscription = coap_add_observer(resource, local_interface, peer, token);
 	  if (subscription) {
 #ifdef COAP_STATS
@@ -627,7 +627,7 @@ hnd_get_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
 	  }
         }
 	else if(*p == '1' || observe_action == 1){
-	  debug("OBSERVE option == 1, unsubscribing, peer=%d, token=%s\n", peer->size, token);
+	  debug("OBSERVE option == 1, unsubscribing\n");
 	  //unsubscribe the topic by deleting the observer
 	  coap_delete_observer(resource, peer, token);
 #ifdef COAP_STATS
@@ -759,7 +759,7 @@ void hnd_get_ps_stats(coap_context_t  *ctx, struct coap_resource_t *resource,  c
       p = COAP_OPT_VALUE(option);
       
       if(coap_opt_length(option) == 0 || *p == '0'){
-	debug("OBSERVE value == 0, adding subscriber, peer=%d, token=%s\n", peer->size, token);
+	debug("OBSERVE value == 0, adding subscriber\n");
 	subscription = coap_add_observer(resource, local_interface, peer, token);
 	n_subscribers++;
 	if (subscription) {
@@ -768,7 +768,7 @@ void hnd_get_ps_stats(coap_context_t  *ctx, struct coap_resource_t *resource,  c
 	}
       }//p==0
       else if(*p == '1'){
-	debug("OBSERVE option == 1, unsubscribing, peer=%d, token=%s\n", peer->size, token);
+	debug("OBSERVE option == 1, unsubscribing\n");
 	//unsubscribe the topic by deleting the observer
 	coap_delete_observer(resource, peer, token);
 	n_subscribers--; 
