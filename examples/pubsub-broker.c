@@ -893,7 +893,7 @@ hnd_post_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coap_
 	     coap_address_t *peer, coap_pdu_t *request, str *token,
 	     coap_pdu_t *response) {
 
-  debug("hnd_post_ps()\n");
+  debug("hnd_post_ps()\nURI length=%d and value=%s\n",resource->uri.length, resource->uri.s);
 
   size_t size;
   unsigned char *data;
@@ -959,29 +959,63 @@ hnd_post_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coap_
     response->hdr->code = COAP_RESPONSE_CODE(400);//BAD REQUEST
     return;
   }
+
+  //Check that the current resource has ct=40; otherwise creating (sub)topic is not allowed
+  coap_attr_t *cf = coap_find_attr(resource, "ct", 2);
+  if(cf != NULL){
+    unsigned int cformat = atoi(cf->value.s);
+    if(cformat != 40){
+      debug("resource's content-format = %u does not allow creating (sub)topics\n", cformat);
+      response->hdr->code = COAP_RESPONSE_CODE(403);//Forbidden
+      return;
+    }
+    else if(cf == NULL){
+      debug("resource does not have ct attribute!\n");
+      /*
+      unsigned char bufber[50];
+      coap_print_link(resource, bufber, 50, 0);
+      debug("resource link=%s\n", bufber);       
+      */		
+      response->hdr->code = COAP_RESPONSE_CODE(405);//Method Not Allowed
+      return;
+    }
+  }
+
+
+
   //check the current resources whether this topic already exists?
   coap_key_t pskey;
-  unsigned char *path = (unsigned char*)calloc(1, topic_length+4);//MiM 16.12.2015
+  //unsigned char *path = (unsigned char*)calloc(1, topic_length+4);//MiM 16.12.2015
+  unsigned char *path = (unsigned char*)calloc(1, topic_length+resource->uri.length+2); 
+
+  memcpy(&path[0], resource->uri.s, resource->uri.length);
+  path[resource->uri.length] = '/';
+  memcpy(&path[resource->uri.length+1], &topic[topic_start+1], topic_length);
+  debug("path=%s, length=%d\n", path, topic_length+resource->uri.length+1);
+  /*
   path[0] = 'p';
   path[1] = 's';
   path[2] = '/';
   
   memcpy(&path[3], &topic[topic_start+1], topic_length); //MiM 16.12.2015
   //debug("path=%s, length=%d\n", path, topic_length+3);
-  
-  coap_hash_path(path, topic_length+3, pskey); 
+  */
+
+  //coap_hash_path(path, topic_length+3, pskey); 
+  coap_hash_path(path, topic_length+resource->uri.length+1, pskey);
 
   if(coap_get_resource_from_key(ctx, pskey) == NULL){
     //create the resource
 
-    coap_resource_t *newr = coap_resource_init((unsigned char *)path, topic_length+3, 0);
+    coap_resource_t *newr = coap_resource_init((unsigned char *)path, /*topic_length+3*/topic_length+resource->uri.length+1, 0);
+
     if(newr == NULL){
       debug("error creating new resource\n");
       response->hdr->code = COAP_RESPONSE_CODE(500);//Internal Server Error
       return;
     }
     
-    coap_register_handler(newr, COAP_REQUEST_POST, hnd_post_ps);//TODO: this should be a different function to support subtopics?
+    coap_register_handler(newr, COAP_REQUEST_POST, hnd_post_ps);
     coap_register_handler(newr, COAP_REQUEST_PUT, hnd_put_ps);
     coap_register_handler(newr, COAP_REQUEST_GET, hnd_get_ps);
     coap_register_handler(newr, COAP_REQUEST_DELETE, hnd_delete_ps);
@@ -1030,13 +1064,23 @@ hnd_post_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coap_
     debug("response code = %s\n", coap_response_phrase(COAP_RESPONSE_CODE(201)));
     response->hdr->code = COAP_RESPONSE_CODE(201);
 
+    /*
     //add Location-Path options:
     int opt_size =  coap_add_option(response, COAP_OPTION_LOCATION_PATH, 2, "ps");
     opt_size = coap_add_option(response, COAP_OPTION_LOCATION_PATH, topic_length, &path[3]); 
-
+    */
     //TODO: if subtopics, location-path must be split further
-       
-
+    int start = 0;
+    int opt_size;
+    for(int i=0;i<topic_length+resource->uri.length+1;i++){
+      if(path[i] == '/'){
+	opt_size = coap_add_option(response, COAP_OPTION_LOCATION_PATH, i-start, &path[start]); 
+	start = i+1;
+	debug("added location-path option of size %d\n", opt_size);
+      }
+    } 
+    opt_size = coap_add_option(response, COAP_OPTION_LOCATION_PATH, topic_length+resource->uri.length+1-start, &path[start]); 
+    debug("added location-path option of size %d\n", opt_size);
     
 #ifdef COAP_STATS
     n_sent_messages++;
@@ -1184,7 +1228,7 @@ init_resources(coap_context_t *ctx) {
   coap_register_handler(psr, COAP_REQUEST_DELETE, hnd_delete_ps);
 
   coap_add_attr(psr, "rt", 2, "core.ps", 7, 0);
-  coap_add_attr(psr, "ct", 2, "40", 2, 0); //content-type=40=app/link-format
+  coap_add_attr(psr, (unsigned char *)"ct", 2, (unsigned char *)"40", 2, 0); //content-type=40=app/link-format
   coap_add_attr(psr, (unsigned char *)"title", 5, (unsigned char *)"\"CoAP pubsub broker\"", 20, 0);
 
 
