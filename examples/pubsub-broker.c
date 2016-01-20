@@ -981,7 +981,30 @@ hnd_post_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coap_
     }
   }
 
+  //Check the max-age of this resource
+  coap_attr_t *maxage = coap_find_attr(resource, "max-age", 7);
+  if(maxage != NULL){
+    struct timeval now;
+    gettimeofday(&now, NULL);
 
+    if(now.tv_sec > atoi(maxage->value.s)){
+      debug("resource has expired its Max-Age!\n");
+      response->hdr->code = COAP_RESPONSE_CODE(404);//Not Found
+
+      //also delete this resource
+      coap_delete_resource(ctx, resource->key); 
+      debug("deleted the resource\n");
+
+      return;
+    }
+    else {
+      //delete this resource's max-age attribute
+      LL_DELETE(resource->link_attr, maxage);
+      coap_delete_attr(maxage);
+      debug("max-age attribute deleted\n");
+    }
+  }
+   
 
   //check the current resources whether this topic already exists?
   coap_key_t pskey;
@@ -1060,6 +1083,31 @@ hnd_post_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coap_
     coap_add_resource(ctx, newr);
     
     debug("newr resource key = %d, resource uri=%s, uri.length=%d\n", newr->key, newr->uri.s, newr->uri.length);
+
+    //TODO: add new resource's link to its parent (==this resource) as a value
+ 
+   
+    size_t len = 50;
+    size_t offset = 0;
+    unsigned char *buffer = (unsigned char*)calloc(1, len);
+
+    coap_print_link(newr, buffer, &len, &offset);
+    debug("newr link=%s, len=%d, offset=%d\n", buffer, len, offset);       
+      
+    //get the current value and append new resource to it:
+    struct topic_value *tv = NULL;
+    HASH_FIND_INT(topic_values, resource->key, tv);
+    if(tv == NULL){
+      //first subtopic to this resource
+      debug("first subtopic value to this resource, creating new\n");
+    }
+    else {
+      //this resource already has subtopic(s)
+      debug("resource already has a subtopic value, appending\n");
+    }
+
+    //TODO: CHECK THE MAXAGE OF THIS RESOURCE! IF expired, can not create subtopic!?
+
     //send response 2.01 Created
     debug("response code = %s\n", coap_response_phrase(COAP_RESPONSE_CODE(201)));
     response->hdr->code = COAP_RESPONSE_CODE(201);
@@ -1069,7 +1117,7 @@ hnd_post_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coap_
     int opt_size =  coap_add_option(response, COAP_OPTION_LOCATION_PATH, 2, "ps");
     opt_size = coap_add_option(response, COAP_OPTION_LOCATION_PATH, topic_length, &path[3]); 
     */
-    //TODO: if subtopics, location-path must be split further
+    
     int start = 0;
     int opt_size;
     for(int i=0;i<topic_length+resource->uri.length+1;i++){
