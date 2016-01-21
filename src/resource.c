@@ -494,6 +494,9 @@ coap_print_link(const coap_resource_t *resource,
 
   LL_FOREACH(resource->link_attr, attr) {
 
+    if(strcmp(attr->name.s, "max-age")==0)
+      continue; //do not print max-age attribute (MiM 21.1.2016)
+
     PRINT_COND_WITH_OFFSET(p, bufend, *offset, ';', *len);
 
     COPY_COND_WITH_OFFSET(p, bufend, *offset,

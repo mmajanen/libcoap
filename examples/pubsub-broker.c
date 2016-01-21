@@ -126,8 +126,7 @@ handle_sigint(int signum UNUSED_PARAM) {
   quit = 1;
 }
 
-#define INDEX "This is a CoAP publish-subscribe broker made with libcoap\n" \
-              "Copyright (C) 2015--2016 Mikko Majanen <mikko.majanen@vtt.fi>\n"
+#define INDEX "This is a CoAP publish-subscribe broker made with libcoap\nCopyright (C) 2015--2016 Mikko Majanen <mikko.majanen@vtt.fi>\n"
 
 static void
 hnd_get_index(coap_context_t *ctx UNUSED_PARAM,
@@ -299,8 +298,6 @@ hnd_put_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
   debug("urikey=0x%x%x%x%x\n", urikey[0],urikey[1],urikey[2], urikey[3]);
 
   //cf should be the same as the topic ct; otherwise return error 
-  //(MiM 4.1.2016)
-  // check Content-Format option in PUT request
   debug("checking Content-Format option in PUT...\n");
   option = coap_check_option(request, COAP_OPTION_CONTENT_FORMAT, &opt_iter);
   
@@ -413,11 +410,11 @@ hnd_put_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
       }
       
       tv = (struct topic_value*)calloc(1, sizeof(struct topic_value));
-      memcpy(&(tv->urikeyhash), urikey, 4);//MiM 5.11.2015
+      memcpy(&(tv->urikeyhash), urikey, 4);
       tv->vlen = size;
       tv->tvalue = (unsigned char*)calloc(1, size+1); 
       memcpy(tv->tvalue, topic, size);
-      HASH_ADD_INT(topic_values, urikeyhash, tv);//MiM 5.11.2015
+      HASH_ADD_INT(topic_values, urikeyhash, tv);
       
       
       debug("added value to resource = 0x%x%x%x%x, HASH_COUNT=%d\n", tv->urikeyhash[0],tv->urikeyhash[1], tv->urikeyhash[2],tv->urikeyhash[3], HASH_COUNT(topic_values));
@@ -427,7 +424,7 @@ hnd_put_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
     else { //topic already existed, update the existing value
       debug("updating the topic value\n");
       if(size != tv->vlen)
-	tv->tvalue = (unsigned char*)calloc(1, size+1); //MiM 15.12.2015 != 
+	tv->tvalue = (unsigned char*)calloc(1, size+1);  
       tv->vlen = size;
       memcpy(tv->tvalue, topic, size);
      
@@ -467,13 +464,13 @@ hnd_put_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
 	response->hdr->code = COAP_RESPONSE_CODE(500);//Internal Server Error
 	return;
       }
-      sprintf(expiration, "%d", now.tv_sec);
+      int mlen = sprintf(expiration, "%d", now.tv_sec);
       char *attrname = calloc(1, 8);
       sprintf(attrname, "%s", "max-age");
       
       
       coap_attr_t *a = NULL;
-      a = coap_add_attr(resource, attrname/*"max-age"*/, 7, expiration, 32, COAP_ATTR_FLAGS_RELEASE_NAME | COAP_ATTR_FLAGS_RELEASE_VALUE); 
+      a = coap_add_attr(resource, attrname/*"max-age"*/, 7, expiration, mlen, COAP_ATTR_FLAGS_RELEASE_NAME | COAP_ATTR_FLAGS_RELEASE_VALUE); 
       //flags == 3
       
     
@@ -493,6 +490,7 @@ hnd_put_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
     //return 2.04 Changed
     response->hdr->code = COAP_RESPONSE_CODE(204);
     
+    /*
     //CHECK REQUEST TYPE (NON/CON); if NON, change resource's flag to NON so that the notifications will be NON type messages (MiM)
     //TODO: this is not anymore in draft version 04 (MiM 12.1.2016)
     if(request->hdr->type == COAP_MESSAGE_NON){
@@ -503,7 +501,7 @@ hnd_put_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
       debug("setting notifications to CON type\n");
       coap_resource_set_mode(resource, COAP_RESOURCE_FLAGS_NOTIFY_CON);
     }
-
+    */
 #ifdef COAP_STATS
 	  n_sent_messages++;
 	  n_publishments++;
@@ -563,7 +561,7 @@ hnd_get_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
     return;
   }
 
-  //Check the Accept (content-format) option (MiM 15.1.2015):
+  //Check the Accept (content-format) option:
   if(request != NULL){
     option = coap_check_option(request, COAP_OPTION_ACCEPT, &opt_iter);
     if(option){
@@ -608,7 +606,6 @@ hnd_get_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
       // check the OBSERVE option value: 0 = subscribe, 1 = unsubscribe
       option = coap_check_option(request, COAP_OPTION_OBSERVE, &opt_iter);
       if(option){
-	//MiM 30.9.2015:
 	observe_action = coap_decode_var_bytes(coap_opt_value(option), coap_opt_length(option));
 	debug("observe_action = %u\n", observe_action);
 
@@ -667,7 +664,7 @@ hnd_get_ps(coap_context_t  *ctx, struct coap_resource_t *resource, const coap_en
     //if content:
     if(tv->tvalue){
       
-      //Add Content-Format option (MiM 4.1.2015):
+      //Add Content-Format option:
       coap_attr_t *cf = coap_find_attr(resource, "ct", 2);
       if(cf){
 	unsigned int cformat = atoi(cf->value.s);
@@ -739,6 +736,7 @@ pubsub_stats_resource->dirty = 1;
 }
 
 #ifdef COAP_STATS
+//THIS IS NOT PART OF THE IETF DRAFT !
 void hnd_get_ps_stats(coap_context_t  *ctx, struct coap_resource_t *resource,  const coap_endpoint_t *local_interface, coap_address_t *peer, coap_pdu_t *request, str *token, coap_pdu_t *response){
   
   debug("hnd_get_ps_stats\n");
@@ -1015,7 +1013,7 @@ hnd_post_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coap_
   if(coap_get_resource_from_key(ctx, pskey) == NULL){
     //create the resource
 
-    coap_resource_t *newr = coap_resource_init((unsigned char *)path, /*topic_length+3*/topic_length+resource->uri.length+1, 0);
+    coap_resource_t *newr = coap_resource_init((unsigned char *)path, topic_length+resource->uri.length+1, 0);
 
     if(newr == NULL){
       debug("error creating new resource\n");
@@ -1028,7 +1026,7 @@ hnd_post_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coap_
     coap_register_handler(newr, COAP_REQUEST_GET, hnd_get_ps);
     coap_register_handler(newr, COAP_REQUEST_DELETE, hnd_delete_ps);
 
-    coap_add_attr(newr, "ct", 2, content_type, attr_length, /*COAP_ATTR_FLAGS_RELEASE_NAME |*/ COAP_ATTR_FLAGS_RELEASE_VALUE ); //MiM 16.12.2015
+    coap_add_attr(newr, "ct", 2, content_type, attr_length, /*COAP_ATTR_FLAGS_RELEASE_NAME |*/ COAP_ATTR_FLAGS_RELEASE_VALUE ); 
 
     newr->observable = 1; //make it observable so that clients can subscribe it
 
@@ -1271,7 +1269,7 @@ init_resources(coap_context_t *ctx) {
   //MiM: CoAP pub/sub //////////////////////////////////////
   coap_resource_t *psr; //pub-sub resource
 
-  psr = coap_resource_init((unsigned char *)"ps", 2, COAP_RESOURCE_FLAGS_NOTIFY_CON); //The last flag determines whether the observe notifications are CON or NON type messages (MiM); PUT message type determines this for pubsub...
+  psr = coap_resource_init((unsigned char *)"ps", 2, COAP_RESOURCE_FLAGS_NOTIFY_CON); //The last flag determines whether the observe notifications are CON or NON type messages; PUT message type determines this for pubsub (NOT ANYMORE IN DRAFT v04!)...
   coap_register_handler(psr, COAP_REQUEST_POST, hnd_post_ps);
   coap_register_handler(psr, COAP_REQUEST_PUT, hnd_put_ps);
   coap_register_handler(psr, COAP_REQUEST_GET, hnd_get_ps);
@@ -1287,7 +1285,7 @@ init_resources(coap_context_t *ctx) {
 
 
 #ifdef COAP_STATS
-  //pub sub statistics resource (MiM 19.11.2015), not part of standard draft
+  //pub sub statistics resource, not part of IETF draft
   coap_resource_t *ps_stats; //pub-sub statistics resource
 
   ps_stats = coap_resource_init((unsigned char *)"ps/stats", 8, COAP_RESOURCE_FLAGS_NOTIFY_NON); //The last flag determines whether the observe notifications are CON or NON type messages (MiM)
