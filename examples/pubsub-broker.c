@@ -970,12 +970,7 @@ hnd_post_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coap_
       return;
     }
     else if(cf == NULL){
-      debug("resource does not have ct attribute!\n");
-      /*
-      unsigned char bufber[50];
-      coap_print_link(resource, bufber, 50, 0);
-      debug("resource link=%s\n", bufber);       
-      */		
+      debug("resource does not have ct attribute!\n");		
       response->hdr->code = COAP_RESPONSE_CODE(405);//Method Not Allowed
       return;
     }
@@ -1008,23 +1003,13 @@ hnd_post_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coap_
 
   //check the current resources whether this topic already exists?
   coap_key_t pskey;
-  //unsigned char *path = (unsigned char*)calloc(1, topic_length+4);//MiM 16.12.2015
   unsigned char *path = (unsigned char*)calloc(1, topic_length+resource->uri.length+2); 
 
   memcpy(&path[0], resource->uri.s, resource->uri.length);
   path[resource->uri.length] = '/';
   memcpy(&path[resource->uri.length+1], &topic[topic_start+1], topic_length);
   debug("path=%s, length=%d\n", path, topic_length+resource->uri.length+1);
-  /*
-  path[0] = 'p';
-  path[1] = 's';
-  path[2] = '/';
   
-  memcpy(&path[3], &topic[topic_start+1], topic_length); //MiM 16.12.2015
-  //debug("path=%s, length=%d\n", path, topic_length+3);
-  */
-
-  //coap_hash_path(path, topic_length+3, pskey); 
   coap_hash_path(path, topic_length+resource->uri.length+1, pskey);
 
   if(coap_get_resource_from_key(ctx, pskey) == NULL){
@@ -1070,13 +1055,13 @@ hnd_post_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coap_
 	response->hdr->code = COAP_RESPONSE_CODE(500);//Internal Server Error
 	return;
       }
-      sprintf(expiration, "%d", now.tv_sec);
+      int mlen = sprintf(expiration, "%d", now.tv_sec);
       char *attrname = calloc(1, 8);
       sprintf(attrname, "%s", "max-age");
       
 
       coap_attr_t *a = NULL;
-      a = coap_add_attr(newr, attrname/*"max-age"*/, 7, expiration, 32, COAP_ATTR_FLAGS_RELEASE_NAME | COAP_ATTR_FLAGS_RELEASE_VALUE); //flags == 3
+      a = coap_add_attr(newr, attrname/*"max-age"*/, 7, expiration, mlen, COAP_ATTR_FLAGS_RELEASE_NAME | COAP_ATTR_FLAGS_RELEASE_VALUE); //flags == 3
      
     }
 
@@ -1084,15 +1069,15 @@ hnd_post_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coap_
     
     debug("newr resource key = %d, resource uri=%s, uri.length=%d\n", newr->key, newr->uri.s, newr->uri.length);
 
-    //TODO: add new resource's link to its parent (==this resource) as a value
+
+    //add new resource's link to its parent (==this resource) as a value
  
-   
-    size_t len = 50;
+    size_t len = 100;
     size_t offset = 0;
     unsigned char *buffer = (unsigned char*)calloc(1, len);
 
     coap_print_link(newr, buffer, &len, &offset);
-    debug("newr link=%s, len=%d, offset=%d\n", buffer, len, offset);       
+    debug("newr link-format=%s, len=%d, offset=%d\n", buffer, len, offset);
       
     //get the current value and append new resource to it:
     struct topic_value *tv = NULL;
@@ -1100,23 +1085,40 @@ hnd_post_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coap_
     if(tv == NULL){
       //first subtopic to this resource
       debug("first subtopic value to this resource, creating new\n");
+      tv = (struct topic_value*)calloc(1, sizeof(struct topic_value));
+      memcpy(&(tv->urikeyhash), resource->key, 4);
+      tv->vlen = len;
+      tv->tvalue = (unsigned char*)calloc(1, len+1); 
+      memcpy(tv->tvalue, buffer, len);
+     
+      HASH_ADD_INT(topic_values, urikeyhash, tv);
+      
+      
+      debug("added value to resource = 0x%x%x%x%x, HASH_COUNT=%d\n", tv->urikeyhash[0],tv->urikeyhash[1], tv->urikeyhash[2],tv->urikeyhash[3], HASH_COUNT(topic_values));
+
+
+
     }
     else {
       //this resource already has subtopic(s)
       debug("resource already has a subtopic value, appending\n");
-    }
 
-    //TODO: CHECK THE MAXAGE OF THIS RESOURCE! IF expired, can not create subtopic!?
+      int newsize = tv->vlen + len + 2;
+      tv->tvalue = (unsigned char*) realloc(tv->tvalue, newsize);
+      if(tv->tvalue == NULL) debug("realloc failed!!!\n");
+     
+      strncat((char*)tv->tvalue, (const char*)",", 1);
+      strncat((char*)tv->tvalue, buffer, len);
+      tv->vlen += len+1;
+      debug("new value=%s, length=%d\n", tv->tvalue, tv->vlen);
+    }
 
     //send response 2.01 Created
     debug("response code = %s\n", coap_response_phrase(COAP_RESPONSE_CODE(201)));
     response->hdr->code = COAP_RESPONSE_CODE(201);
 
-    /*
-    //add Location-Path options:
-    int opt_size =  coap_add_option(response, COAP_OPTION_LOCATION_PATH, 2, "ps");
-    opt_size = coap_add_option(response, COAP_OPTION_LOCATION_PATH, topic_length, &path[3]); 
-    */
+
+    //add Location-Path option(s):
     
     int start = 0;
     int opt_size;
