@@ -5,6 +5,7 @@
  *
  * Copyright (C) 2015-2016 Mikko Majanen <mikko.majanen@vtt.fi>,
  * VTT Technical Research Centre of Finland Ltd
+ * (for the pub/sub broker code parts)
  *
  * All rights reserved.
 

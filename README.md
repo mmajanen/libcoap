@@ -1,3 +1,12 @@
+This package extends the libcoap by adding an implementation of
+Publish-Subscribe Broker for the Constrained Application Protocol (CoAP),
+draft-koster-core-coap-pubsub-04
+
+Copyright (C) 2015--2016 by Mikko Majanen <mikko.majanen@vtt.fi>
+VTT Technical Research Centre of Finland Ltd
+(for the pub/sub broker code part)
+
+
 libcoap: A C implementation of IETF Constrained Application Protocol (RFC 7252)
 
 Copyright (C) 2010--2015 by Olaf Bergmann <bergmann@tzi.org>
@@ -18,13 +27,12 @@ This directory contains a protocol parser and basic networking
 functions for platform with support for malloc() and BSD-style
 sockets. The examples directory contains a client and a server to
 demonstrate the use of this library. 
+The CoAP pub/sub broker code and instructions for using it can be found in the examples folder.
 
 LICENSE INFORMATION
 ===================
-
-This library is published as open-source software without any warranty
-of any kind. Use is permitted under the terms of the GNU General
-Public License (GPL), Version 2 or higher, OR the simplified BSD
-license. Please refer to LICENSE.GPL oder LICENSE.BSD for further
+The pub/sub broker part can be used under the terms of the simplified BSD license.
+The libcoap library is published as open-source software without any warranty of any kind. Use is permitted under the terms of the GNU General Public License (GPL), Version 2 or higher, OR the simplified BSD license. Please refer to LICENSE.GPL or LICENSE.BSD for further
 details.
+
 
