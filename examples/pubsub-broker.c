@@ -842,7 +842,110 @@ hnd_delete_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coa
   coap_key_t urikey;
   coap_hash_request_uri(request, urikey);
 
-  //remove the topic
+  //Check ct for possible subtopics: (MiM 11.2.2016)
+  unsigned int cformat = 0;
+  coap_attr_t *cf = coap_find_attr(resource, "ct", 2);
+  if(cf){
+    cformat = atoi(cf->value.s);
+    debug("Content-Format = %u\n", cformat);
+  }
+
+  //remove this topic from its parent's topic value (MiM 3.11.2016)
+  str uri = resource->uri;
+  debug("uri.s=%s, length=%d\n", uri.s, uri.length);
+  int stop_index=2;
+  for(int i=3;i<uri.length;i++){
+    if(uri.s[i] == '/')
+      stop_index=i;
+  }
+  //debug("stop_index=%d\n", stop_index);
+
+  coap_resource_t *parent = NULL;
+
+  if(stop_index==2){ //the parent is /ps
+    //debug("parent is pubsub_resource /ps \n");
+    parent = pubsub_resource;
+  }
+  else {
+    //debug("parent is not /ps \n");
+    char *parent_topic = calloc(1, stop_index+1);
+    strncpy(parent_topic, uri.s, stop_index);
+    //debug("parent_topic=%s\n", parent_topic);
+    coap_key_t pkey;
+    coap_hash_path(parent_topic, stop_index, pkey);
+    parent = coap_get_resource_from_key(ctx, pkey);
+  }
+
+  if(parent){
+    debug("parent topic uri=%s\n", parent->uri.s);
+    //get the value and remove this subtopic
+    struct topic_value *tv = NULL;
+    HASH_FIND_INT(topic_values, parent->key, tv);
+    if(tv){
+      debug("parent topic value=%s\n", tv->tvalue);
+      char *value = calloc(1, tv->vlen+1);
+      memcpy(value, tv->tvalue, tv->vlen);
+
+      int topic_start=-1;
+      int topic_end = -1;
+      int topic_end_name = -1;
+      int topic_length = -1;
+      int topic_name_length = -1;
+      for(int i=0;i<tv->vlen;i++){
+	if(value[i]=='<')
+	  topic_start = i;
+	else if(value[i]=='>'){
+	  topic_end_name = i;
+	}
+	else if(value[i]==',' || i==tv->vlen-1){ //<topic>;ct=0;obs,<othertopic>;ct=40;obs
+	  topic_end = i;
+	  if(i==tv->vlen-1) 
+	    topic_end = i+1; //the last topic does not end with ','
+	  if(topic_start<topic_end && topic_start != -1 && topic_end != -1 && topic_end_name > topic_start && topic_end_name < topic_end){
+	    topic_length = topic_end - topic_start -1;
+	    topic_name_length = topic_end_name - topic_start -1;
+	    //debug("start=%d, end=%d, length=%d, name_length=%d\n", topic_start, topic_end, topic_length, topic_name_length);
+	    char *t = calloc(1, topic_length+1);
+	    memcpy(t, &value[topic_start+2], topic_length-1); //remove first '/'
+	    //debug("t(opic)=%s, resource->uri.s=%s, uri.length=%d, topic_name_length-1=%d\n", t, resource->uri.s, resource->uri.length, topic_name_length-1);
+	    if(strncmp(t, resource->uri.s, topic_name_length-1)==0 && topic_name_length-1 == resource->uri.length){
+	      //remove this part from value and save it to parent
+	      //debug("found the value!\n");
+	      
+	      char *newvalue = calloc(1, tv->vlen+1 - topic_length);
+	      int newlength = tv->vlen - topic_length;
+	      int i=0;
+	      for(i=0;i<topic_start;i++)
+		memcpy(&newvalue[i], &value[i], 1);
+
+	      for(int j=topic_end+1;j<tv->vlen;j++){
+		memcpy(&newvalue[i], &value[j], 1);
+		i++;
+	      }
+	      newlength = strlen(newvalue);
+	      //remove possible trailing ','
+	      //debug("newlength=%d\n", newlength);
+	      if(newvalue[strlen(newvalue)-1]==','){
+		newvalue[strlen(newvalue)-1]='\0';
+		newlength = strlen(newvalue);
+	      }
+	      //debug("newvalue=%s, newlength=%d\n", newvalue, newlength);
+	      tv->vlen = newlength;
+	      tv->tvalue = newvalue;
+	      if(tv->vlen == 0){
+		//remove totally if empty value
+		HASH_DEL(topic_values, tv);
+	      }
+	      break; 
+	    }
+	  }
+	}
+      }
+
+    }
+  }
+  
+  //remove this topic
   int deleted = coap_delete_resource(ctx, resource->key);
 
 #ifdef COAP_STATS
@@ -854,8 +957,40 @@ hnd_delete_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coa
   struct topic_value *tv = NULL;
   HASH_FIND_INT(topic_values, urikey, tv);
   if(tv != NULL){
+    //debug("found topic value %s\n", tv->tvalue);
+
+    if(cformat == 40){
+      //delete subtopics (MiM 11.2.2016):
+      //parse the subtopic paths
+      int topic_start = -1;
+      int topic_end = -1; 
+      int topic_length = -1;
+      char *topic = calloc(1, tv->vlen+1);
+      memcpy(topic, tv->tvalue, tv->vlen);
+      //debug("cformat==40, topic=%s\n", topic);
+
+      for(int i=0;i<tv->vlen;i++){
+	if(topic[i]=='<')
+	  topic_start = i;
+	else if(topic[i]=='>'){
+	  topic_end = i;
+	  if(topic_start<topic_end && topic_start != -1 && topic_end != -1){
+	    topic_length = topic_end - topic_start -1;
+	    //debug("start=%d, end=%d, length=%d\n", topic_start, topic_end, topic_length);
+	    char *t = calloc(1, topic_length+1);
+	    memcpy(t, &topic[topic_start+1], topic_length);
+	    //debug("t(opic)=%s\n", t);
+	    delete_topic(t, ctx);
+	  }
+	}
+      } 
+    
+      
+    }
+    //else { //this topic's value should be deleted in delete_topic()????
     HASH_DEL(topic_values, tv);
     debug("topic value deleted from topic_values\n");
+    //}
   }
   else{
     debug("topic value not found in topic_values\n");
@@ -886,6 +1021,74 @@ hnd_delete_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coa
 #endif
 }
 
+void
+delete_topic(char *path, coap_context_t *ctx) {
+  
+  //get the resource from path:
+  coap_key_t rkey;
+  coap_hash_path(path, strlen(path), rkey);
+  coap_resource_t* r = coap_get_resource_from_key(ctx, rkey);
+  if(r){
+    debug("found resource with path %s\n", path);
+    //get the content type of this resource:
+    coap_attr_t *cf = coap_find_attr(r, "ct", 2);
+    if(cf){
+      unsigned int cformat = atoi(cf->value.s);
+      //debug("Content-Format = %u\n", cformat);
+   
+      //get the value of the resource:
+      struct topic_value *tv = NULL;
+      HASH_FIND_INT(topic_values, rkey, tv);
+      if(tv != NULL){
+	//debug("found topic value(length=%d): %s\n", tv->vlen, tv->tvalue);
+
+	if(cformat == 40){
+	  //delete subtopics
+	  //parse the subtopic paths
+	  int topic_start = -1;
+	  int topic_end = -1; 
+	  int topic_length = -1;
+	  char *topic = calloc(1, tv->vlen+1);
+	  memcpy(topic, tv->tvalue, tv->vlen);
+	  //debug("cformat==40, topic=%s\n", topic);
+	  
+	  for(int i=0;i<tv->vlen;i++){
+	    if(topic[i]=='<')
+	      topic_start = i;
+	    else if(topic[i]=='>'){
+	      topic_end = i;
+	      if(topic_start<topic_end && topic_start != -1 && topic_end != -1){
+		topic_length = topic_end - topic_start -1;
+		//debug("start=%d, end=%d, length=%d\n", topic_start, topic_end, topic_length);
+		char *t = calloc(1, topic_length+1);
+		memcpy(t, &topic[topic_start+1], topic_length);
+		//debug("t(opic)=%s\n", t);
+		delete_topic(t, ctx);
+	      }
+	    }
+	  } 
+
+	}
+	//delete topic value of this resource:
+	HASH_DEL(topic_values, tv);
+
+      }
+      else {
+	debug("did not found topic value\n");
+      }
+    }
+    else {
+      debug("no ct for this resource!?\n");
+    }
+    //delete this resource:
+    int deleted = coap_delete_resource(ctx, r->key);
+
+  }
+  else {
+    debug("resource not found with path=%s\n", path);
+  }
+
+}
 
 void 
 hnd_post_ps(coap_context_t  *ctx, struct coap_resource_t *resource,  const coap_endpoint_t *local_interface,
